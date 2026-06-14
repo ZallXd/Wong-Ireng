@@ -3,8 +3,13 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+// Penanganan Environment ES Module untuk __dirname & __filename
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
@@ -14,12 +19,12 @@ const isVercel = process.env.VERCEL === '1' || !!process.env.VERCEL;
 const DATA_DIR = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 
-// Ensure directory exists
+// Memastikan direktori data tersedia
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Seed database file from packaged database if on Vercel and database doesn't exist in /tmp
+// Menyemai (Seed) database jika berjalan di Vercel dan data belum ada di /tmp
 if (isVercel && !fs.existsSync(DATA_FILE)) {
   const seedPaths = [
     path.join(process.cwd(), 'data', 'db.json'),
@@ -39,7 +44,7 @@ if (isVercel && !fs.existsSync(DATA_FILE)) {
   }
 }
 
-// In-Memory Database Structure
+// Struktur Database In-Memory
 let db: {
   users: any[];
   projects: any[];
@@ -54,9 +59,8 @@ let db: {
   groupConfigs: []
 };
 
-// Help helper to hash passwords simply
+// Fungsi pembantu untuk membuat hash password sederhana
 function getHash(password: string) {
-  // Safe simple client/server checksum hashing for isolated environment
   let hash = 0;
   for (let i = 0; i < password.length; i++) {
     const char = password.charCodeAt(i);
@@ -66,7 +70,7 @@ function getHash(password: string) {
   return 'HASH_' + Math.abs(hash).toString(16);
 }
 
-// Init database with realistic starting values for over 6 groups
+// Inisialisasi Database dengan data awal mahasiswa Sistem Komputer (Kelompok 1-7)
 function initDB() {
   const initialUsers = [
     {
@@ -284,11 +288,9 @@ function initDB() {
     };
   });
 
-  // Prefill historical payload data
   const initialTelemetryLogs: any[] = [];
   const now = new Date();
   initialGroupConfigs.forEach((g) => {
-    // Generate 15 logs back in time
     for (let i = 15; i >= 0; i--) {
       const logTime = new Date(now.getTime() - i * 60 * 1000);
       let sensorData: Record<string, any> = {};
@@ -370,7 +372,7 @@ function saveDB() {
   }
 }
 
-// Load and read DB
+// Membaca DB dari penyimpanan lokal/serverless jika ada
 if (fs.existsSync(DATA_FILE)) {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8');
@@ -384,7 +386,7 @@ if (fs.existsSync(DATA_FILE)) {
   initDB();
 }
 
-// Global active client connections for Real-Time SSE
+// Global active client connections untuk Real-Time SSE
 let activeSSEResponses: express.Response[] = [];
 
 function broadcastSSE(data: any) {
@@ -392,15 +394,15 @@ function broadcastSSE(data: any) {
     try {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     } catch (e) {
-      // ignore
+      // abaikan
     }
   });
 }
 
 
-// API REST routes
+// --- API REST Routes ---
 
-// SSE Endpoint for real-time monitoring streams
+// SSE Endpoint untuk pemantauan data real-time
 app.get('/api/telemetry/stream', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -432,14 +434,12 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ error: "Password salah. Silakan periksa kembali." });
   }
 
-  // Authenticated safely
   const { passwordHash, ...safeUser } = user;
   res.json({ success: true, user: safeUser });
 });
 
-// Get context profile
+// Ambil profil sesi aktif
 app.get('/api/auth/me', (req, res) => {
-  // Simple session proxy in standard template
   const authorization = req.headers.authorization;
   if (!authorization) {
     return res.status(401).json({ error: "Missing authorization header credentials" });
@@ -453,7 +453,7 @@ app.get('/api/auth/me', (req, res) => {
   res.json(safeUser);
 });
 
-// Fetch all database records for administrative/visual dashboards
+// Ringkasan data untuk administratif/dashboard visual
 app.get('/api/dashboard/summary', (req, res) => {
   const safeUsers = db.users.map(({ passwordHash, ...u }) => u);
   res.json({
@@ -461,21 +461,18 @@ app.get('/api/dashboard/summary', (req, res) => {
     devices: db.devices,
     projects: db.projects,
     users: safeUsers,
-    logs: db.telemetryLogs.slice(-250) // Return last 250 records to save transfer
+    logs: db.telemetryLogs.slice(-250)
   });
 });
 
-// Post device telemetry from microcontrollers (the real IoT endpoint requested!)
+// Endpoint utama penampung data Telemetri dari Mikrokontroler ESP32
 app.post('/api/telemetry/device/:groupSlug', (req, res) => {
   const { groupSlug } = req.params;
   const apiKey = req.headers['x-api-key'] || req.body.apiKey;
   let sensorData = req.body.sensorData || req.body.data;
 
-  // Fallback: If payload is not wrapped inside 'sensorData' or 'data', 
-  // check if telemetry keys are directly at the root of the JSON body.
   if (!sensorData && typeof req.body === 'object' && req.body !== null) {
     const keys = Object.keys(req.body);
-    // If the body has fields and is not empty or just metadata, treat root body as sensorData
     if (keys.length > 0 && !keys.includes('apiKey') && !keys.includes('sensorData') && !keys.includes('data')) {
       sensorData = req.body;
     }
@@ -485,7 +482,6 @@ app.post('/api/telemetry/device/:groupSlug', (req, res) => {
     return res.status(400).json({ error: "JSON Telemetry 'sensorData' is required." });
   }
 
-  // Validate API key aligns to user of this group
   const matchedUser = db.users.find(u => u.groupSlug === groupSlug && u.apiKey === apiKey);
   const isAdmin = db.users.find(u => u.role === "SUPER_ADMIN" && u.apiKey === apiKey);
 
@@ -493,7 +489,6 @@ app.post('/api/telemetry/device/:groupSlug', (req, res) => {
     return res.status(401).json({ error: "Invalid API Key or X-API-Key header credentials for group " + groupSlug });
   }
 
-  // Authenticated! Insert log records
   const now = new Date();
   const newLog = {
     id: `log-${groupSlug}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -507,7 +502,6 @@ app.post('/api/telemetry/device/:groupSlug', (req, res) => {
     db.telemetryLogs.shift();
   }
 
-  // Update device record details
   const dev = db.devices.find(d => d.groupSlug === groupSlug);
   if (dev) {
     dev.telemetryCount += 1;
@@ -518,7 +512,6 @@ app.post('/api/telemetry/device/:groupSlug', (req, res) => {
 
   saveDB();
 
-  // Broadcast out in SSE
   broadcastSSE({
     type: 'TELEMETRY_UPDATE',
     groupSlug,
@@ -529,7 +522,7 @@ app.post('/api/telemetry/device/:groupSlug', (req, res) => {
   res.json({ success: true, message: "Telemetry received & stored successfully.", log: newLog });
 });
 
-// User Management (Super Admin only can build, delete reset)
+// Pembuatan User Baru (Hanya Super Admin)
 app.post('/api/admin/users/create', (req, res) => {
   const { username, password, role, groupSlug, groupName } = req.body;
   const requesterKey = req.headers.authorization?.replace('Bearer ', '');
@@ -567,7 +560,6 @@ app.post('/api/admin/users/create', (req, res) => {
 
   db.users.push(newUser);
 
-  // Auto-generate initial config & device for the group
   if (!db.groupConfigs.find(g => g.groupSlug === slug)) {
     db.groupConfigs.push({
       groupSlug: slug,
@@ -610,7 +602,7 @@ app.post('/api/admin/users/create', (req, res) => {
   res.json({ success: true, user: safeUser });
 });
 
-// Delete user account (Super Admin only)
+// Menghapus User Akun (Hanya Super Admin)
 app.delete('/api/admin/users/:userId', (req, res) => {
   const { userId } = req.params;
   const requesterKey = req.headers.authorization?.replace('Bearer ', '');
@@ -634,7 +626,7 @@ app.delete('/api/admin/users/:userId', (req, res) => {
   res.json({ success: true, message: "Akun pengguna berhasil dihapus." });
 });
 
-// Custom widgets edit/save configurator for custom dashboards
+// Pengaturan Konfigurasi Widget Custom Dashboard
 app.post('/api/groups/:groupSlug/widgets', (req, res) => {
   const { groupSlug } = req.params;
   const { widgets, projectName, projectDesc } = req.body;
@@ -645,7 +637,6 @@ app.post('/api/groups/:groupSlug/widgets', (req, res) => {
     return res.status(401).json({ error: "Silakan login terlebih dahulu." });
   }
 
-  // Check if they are authorized for this group or is Super Admin
   if (requester.groupSlug !== groupSlug && requester.role !== 'SUPER_ADMIN') {
     return res.status(403).json({ error: "Anda tidak memiliki hak akses mengubah dasbor kelompok ini." });
   }
@@ -656,7 +647,6 @@ app.post('/api/groups/:groupSlug/widgets', (req, res) => {
     if (projectName) config.projectName = projectName;
     if (projectDesc) config.projectDesc = projectDesc;
 
-    // sync to projects
     const proj = db.projects.find(p => p.groupSlug === groupSlug);
     if (proj) {
       if (projectName) proj.name = projectName;
@@ -664,10 +654,9 @@ app.post('/api/groups/:groupSlug/widgets', (req, res) => {
       proj.lastUpdated = new Date().toISOString();
     }
 
-    saveDB();
+  	saveDB();
     res.json({ success: true, config });
 
-    // Broadcast updates
     broadcastSSE({
       type: 'CONFIG_UPDATE',
       groupSlug,
@@ -678,7 +667,7 @@ app.post('/api/groups/:groupSlug/widgets', (req, res) => {
   }
 });
 
-// Call Gemini API on the server side to gain Smart Anomaly & Intelligence analytical logs
+// Modul Analisis AI Menggunakan Google Gemini SDK Modern 
 app.post('/api/ai/analyze', async (req, res) => {
   const { groupSlug } = req.body;
   const config = db.groupConfigs.find(g => g.groupSlug === groupSlug);
@@ -693,7 +682,7 @@ app.post('/api/ai/analyze', async (req, res) => {
     return res.json({
       success: true,
       analysis: `### 🤖 AI Analisis Telemetri (${config.projectName})
-Gagal memanggil modul analisis kecerdasan mikro. Kunci API Gemini tidak disetel dalam Rahasia Sistem Anda. 
+Gagal memanggil modul analisis kecerdasan mikro. Kunci API Gemini tidak disetel dalam Rahasia Sistem Anda.      
       
 * **Rekomendasi Operasional**: 
   Silakan tambahkan kunci API Gemini yang sah \`GEMINI_API_KEY\` pada panel **Settings > Secrets** di Google AI Studio untuk mengaktifkan audit korelasi mendalam bermuatan kecerdasan buatan secara real-time.`
@@ -742,8 +731,7 @@ Berikan audit ringkas profesional berbahasa Indonesia dalam format Markdown:
   }
 });
 
-
-// Set up Vite development server or build output server
+// Menjalankan Server (Vite Dev Server Mode atau Static Build Prod Mode)
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import('vite');
@@ -765,7 +753,7 @@ async function startServer() {
   });
 }
 
-// Only start the server if not running on Vercel
+// Server dijalankan hanya jika di luar lingkungan Vercel
 if (!isVercel) {
   startServer();
 }
